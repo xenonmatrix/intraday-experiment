@@ -1,7 +1,7 @@
 """Verified, immutable broker executions; each fill belongs to exactly one trade."""
 from datetime import timedelta
 import json
-from ..models import D, NY, Unsafe, dt, iso, decimal
+from ..models import D, NY, Unsafe, dt, execution_identity, iso, decimal
 from ..risk import TERMINAL as BROKER_TERMINAL, reconcile
 from .db import TERMINAL
 
@@ -27,7 +27,10 @@ def ingest(ledger,oid,actual,now):
                 existing=ledger.db.execute('SELECT order_id,data FROM fills WHERE id=?',(e['id'],)).fetchone()
                 if existing:
                     stored=json.loads(existing['data'])
-                    if existing['order_id']!=oid or stored['execution']!=e:raise Unsafe('Immutable fill changed/foreign fill')
+                    # Match the fill's id, quantity, price and fee. A later read may
+                    # add venue or timestamp fields; that must not block the stop.
+                    if existing['order_id']!=oid or execution_identity(stored['execution'])!=execution_identity(e):
+                        raise Unsafe('Immutable fill changed/foreign fill')
                     continue
                 day=dt(e['timestamp']).astimezone(NY).date().isoformat();daily=ledger.ensure_session(day);pnl=D(0)
                 if o['side']=='buy':

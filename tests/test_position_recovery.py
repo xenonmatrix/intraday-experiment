@@ -209,8 +209,11 @@ def test_integrated_protective_exit_during_recovery(env,reason):
     if reason=='TIME':b.time+=timedelta(minutes=30)
     if reason=='SESSION_CLOSE':b.time=dt('2026-09-28T19:45:00Z')
     obs=recovered_observation(e,b)
-    if reason=='VWAP':obs['candidates']['SPY']['vwap']='101'
-    assert e.exit_reason(next(t for t in db.trades() if t['symbol']=='SPY'),obs)==reason
+    trade=next(t for t in db.trades() if t['symbol']=='SPY')
+    if reason=='VWAP':
+        obs['candidates']['SPY']['vwap']='101'
+        trade['entered']=obs['candidates']['SPY']['last_bar']
+    assert e.exit_reason(trade,obs)==reason
 
 
 def test_integrated_deadline_then_verified_exit_once(env):

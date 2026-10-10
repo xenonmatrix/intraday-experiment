@@ -252,6 +252,12 @@ class Robinhood:
         self.call_counts[name] = self.call_counts.get(name,0)+1
         started=time.monotonic()
         self.active_tools.add(name)
+        if self.diagnostic_runtime is not None:
+            # The cycle heartbeat is otherwise stamped once, before review and
+            # reconciliation. Refresh it around each RPC so in-flight broker
+            # work is not mistaken for a dead worker.
+            from .service import heartbeat
+            heartbeat(self.diagnostic_runtime, 'POLLING')
         try:
             result = await self.client.call_tool(name, args, read_timeout_seconds=timedelta(seconds=self.timeout))
         except Exception as exc:

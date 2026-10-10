@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -70,6 +70,22 @@ class Config:
     target_r: D = D("2")
     max_hold_minutes: int = 30
     vwap_exit: bool = True
+
+
+def bar_closed_after(bar_begins, entered, minutes=5):
+    """True when that bar's close is strictly after the fill.
+
+    A VWAP exit may use only a bar that finished after the position existed.
+    The bar in progress at the fill, and every earlier bar, does not count.
+    """
+    if not bar_begins or not entered:
+        return False
+    return dt(bar_begins) + timedelta(minutes=minutes) > dt(entered)
+
+
+def execution_identity(execution):
+    """Economic identity of one fill. Extra broker fields are not part of it."""
+    return (execution.get("id"), decimal(execution["quantity"]), decimal(execution["price"]), decimal(execution["fees"]))
 
 
 def valid_quote(q, now, cfg):

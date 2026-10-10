@@ -1,6 +1,6 @@
 """Actual order verification. Guarded submission lives in LiveEngine."""
 import json
-from .models import D, Mode, Unsafe, decimal
+from .models import D, Mode, Unsafe, decimal, execution_identity
 
 
 def verify_actual_order(store, intent_key, order):
@@ -40,9 +40,10 @@ def verify_actual_order(store, intent_key, order):
                 raise Unsafe("Invalid execution")
             existing = store.get("actual_execution:" + e["id"])
             value = dict(ref_id=row["ref_id"], execution=e)
-            if existing and existing != value:
+            if existing and (existing.get("ref_id") != row["ref_id"] or execution_identity(existing["execution"]) != execution_identity(e)):
                 raise Unsafe("Execution changed")
-            store.put("actual_execution:" + e["id"], value)
+            if not existing:
+                store.put("actual_execution:" + e["id"], value)
         store.db.execute("UPDATE intents SET status=?, filled_quantity=? WHERE intent_key=?", (status, str(cumulative), intent_key))
     if status == "AMBIGUOUS":
         raise Unsafe("Ambiguous order state")

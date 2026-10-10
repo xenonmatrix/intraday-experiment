@@ -2,7 +2,7 @@
 from datetime import datetime,timedelta
 import json,time
 from pathlib import Path
-from ..models import D,UTC,NY,Unsafe,PreSubmissionBlocked,dt,iso,valid_quote
+from ..models import D,UTC,NY,Unsafe,PreSubmissionBlocked,bar_closed_after,dt,iso,valid_quote
 from ..calendar import Calendar
 from ..orb import evaluate
 from ..host_health import require_host
@@ -23,6 +23,9 @@ class Coordinator:
         self.account=ledger.get('account_number');self.last_bars={};self.last_quotes={}
         self.recovery_policy=recovery_policy or RecoveryPolicy()
         self.monotonic=monotonic_clock or time.monotonic
+        # Set after a broker id or cancel is acknowledged. A slow cycle must not
+        # KILL a mutation that already reached the broker.
+        self.mutation_acknowledged=False
 
     def session(self):return self.calendar.session(self.now())
     def candidate_config(self,candidate):return self.cfg
@@ -227,6 +230,7 @@ class Coordinator:
             bid=(result.get('order') or {}).get('id')
             if not isinstance(bid,str) or not bid:raise Unsafe('Acknowledgement missing broker ID')
             with self.ledger.tx():self.ledger.update_order(oid,'SUBMITTED',broker_id=bid)
+            self.mutation_acknowledged=True
             actual=await broker.order(self.account,bid)
             ingest(self.ledger,oid,actual,self.now())
         except PreSubmissionBlocked:
@@ -332,7 +336,7 @@ class Coordinator:
         if bid>=D(t['target']):return 'TARGET'
         candidate=obs['candidates'].get(t['symbol'],{})
         raw=self.last_bars.get(t['symbol'],[])
-        if t.get('vwap_exit',True) and candidate.get('last_bar') and candidate.get('vwap'):
+        if t.get('vwap_exit',True) and candidate.get('last_bar') and candidate.get('vwap') and bar_closed_after(candidate['last_bar'],t.get('entered')):
             last=next((b for b in raw if dt(b['begins_at'])==dt(candidate['last_bar'])),None)
             if last and D(last['close_price'])<D(candidate['vwap']):return 'VWAP'
         if now>=dt(t['time_exit']):return 'TIME'
@@ -362,6 +366,7 @@ class Coordinator:
         try:
             self.cancel_guard(args)
             await broker.cancel_owned(args)
+            self.mutation_acknowledged=True
             actual=await broker.order(self.account,order['broker_id'])
             ingest(self.ledger,order['id'],actual,self.now())
         except BaseException:

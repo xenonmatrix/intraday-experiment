@@ -7,7 +7,7 @@ from pathlib import Path
 from .engine import Engine
 from .execution import verify_actual_order
 from .live_policy import LivePolicy
-from .models import Config, D, Mode, UTC, NY, Unsafe, PreSubmissionBlocked, dt, iso, down, valid_quote
+from .models import Config, D, Mode, UTC, NY, Unsafe, PreSubmissionBlocked, bar_closed_after, dt, iso, down, valid_quote
 from .risk import reconcile, eligible, size, TERMINAL
 from .strategy import evaluate
 from .store import atomic_text
@@ -39,6 +39,7 @@ class LiveEngine(Engine):
         self.account = store.get("account_number")
         self.last_quotes = {}
         self.proof = None
+        self.mutation_acknowledged = False
         # PREPARED is provably never dispatched; DISPATCHING may have reached broker.
         with store.db:
             store.db.execute("UPDATE intents SET status='ABORTED' WHERE mode='LIVE' AND status='PREPARED'")
@@ -277,6 +278,7 @@ class LiveEngine(Engine):
                 raise Unsafe("Submission response lacks broker order ID")
             with self.store.db:
                 self.store.db.execute("UPDATE intents SET broker_id=?, status='SUBMITTED' WHERE intent_key=?", (order_id,key))
+            self.mutation_acknowledged = True
             # Acknowledgement is not a fill. Always query after submission.
             actual = await broker.order(self.account, order_id)
             self.ingest(key, actual)
@@ -335,7 +337,7 @@ class LiveEngine(Engine):
             reason = "INVALIDATION"
         elif bid >= D(pos["target"]):
             reason = "TARGET"
-        elif candidates.get(pos["symbol"],{}).get("below_vwap"):
+        elif candidates.get(pos["symbol"],{}).get("below_vwap") and bar_closed_after(candidates.get(pos["symbol"],{}).get("last_bar"), pos.get("entered")):
             reason = "VWAP"
         elif now >= dt(pos["time_exit"]) and (pos.get('strategy') == 'orb' or not pos["reached_1r"]):
             reason = "TIME"

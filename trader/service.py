@@ -99,6 +99,7 @@ async def run(root, mode=Mode.PAPER, once=False):
                         healthy_since=time.monotonic()
                         while not stopping.is_set() and not (runtime/'STOP').exists():
                             started=time.monotonic();heartbeat(runtime,'POLLING');broker.cycle_error=None
+                            if mode==Mode.LIVE: engine.mutation_acknowledged=False
                             now=datetime.now(UTC);session=calendar.session(now)
                             active=bool(session and session.contains(now))
                             probe=probe_active(runtime,now)
@@ -157,8 +158,10 @@ async def run(root, mode=Mode.PAPER, once=False):
                                 audit(runtime,observed,'MONITOR_CYCLE',**{k:v for k,v in cycle.items() if k not in ('at','pid')})
                                 heartbeat(runtime,'HEALTHY' if store.get('gate',{}).get('entries_allowed') else 'ENTRIES_BLOCKED')
                                 if once: return
-                                if elapsed>engine.cfg.heartbeat_timeout:
+                                if elapsed>engine.cfg.heartbeat_timeout and not getattr(engine,'mutation_acknowledged',False):
                                     atomic_text(runtime/'KILL','Monitoring cycle exceeded deadline\n');engine.block(observed,'Monitoring latency exceeded safety deadline')
+                                elif elapsed>engine.cfg.heartbeat_timeout:
+                                    audit(runtime,observed,'CYCLE_SLOW_AFTER_ACK',elapsed_seconds=round(elapsed,3))
                                 delay=max(.1,(engine.cfg.poll_seconds if active or warmup or probe else 30)-elapsed)
                                 try: await asyncio.wait_for(stopping.wait(),timeout=delay)
                                 except TimeoutError: pass

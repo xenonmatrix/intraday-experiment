@@ -108,6 +108,7 @@ async def run(root,once=False):
                             heartbeat(r,'POLLING');broker.cycle_error=None;broker.failure_context={};started=time.monotonic();now=engine.now();session=engine.calendar.session(now)
                             active=bool(session and session.contains(now));warm=bool(session and session.open-timedelta(minutes=config['session']['monitor_warmup_minutes'])<=now<session.open)
                             try:
+                                engine.mutation_acknowledged=False
                                 # Reconcile and check price/time/emergency exits before
                                 # signal data; a historical endpoint outage cannot prevent
                                 # known-position exits using verified current quotes.
@@ -123,9 +124,12 @@ async def run(root,once=False):
                                 atomic_text(r/'authentication.json',json.dumps(dict(at=health.get('at'),status=health.get('auth'),account_suffix=ledger.settings().account_suffix,connection=broker.connection_info)))
                                 heartbeat(r,'ENTRIES_BLOCKED' if not ledger.settings().live_enabled else 'HEALTHY')
                                 state=report(root,ledger,engine)
-                                if time.monotonic()-started>wd['cycle_deadline_seconds']:
+                                overrun=cycle_overrun(time.monotonic()-started,wd['cycle_deadline_seconds'],engine.mutation_acknowledged)
+                                if overrun=='KILL':
                                     engine.failure(Unsafe('Monitor cycle exceeded configured deadline'))
                                     atomic_text(r/'KILL','Monitoring cycle deadline exceeded\n')
+                                elif overrun=='SLOW_AFTER_ACK':
+                                    ledger.event(engine.now(),'CYCLE_SLOW_AFTER_ACK',dict(elapsed_seconds=round(time.monotonic()-started,3)))
                                 if time.monotonic()-good_since>=30:attempt=0
                                 if once:return
                                 await pause(max(.1,(cc['poll_seconds'] if active or warm else cc['idle_poll_seconds'])-(time.monotonic()-started)),'ENTRIES_BLOCKED' if state['blockers'] else 'HEALTHY')
@@ -149,6 +153,19 @@ async def run(root,once=False):
                 for t in ledger.trades():t['recovery_exit']=True;ledger.save_trade(t)
             report(root,ledger,engine);ledger.close()
 
+
+
+def cycle_overrun(elapsed, limit, mutation_acknowledged):
+    """A long cycle after an acknowledged order must not KILL or force an exit.
+
+    KILL is for a cycle that ran long without a broker acknowledgement. The
+    deadline is not evidence that an order already accepted should be flattened.
+    """
+    if elapsed <= limit:
+        return 'OK'
+    if mutation_acknowledged:
+        return 'SLOW_AFTER_ACK'
+    return 'KILL'
 
 
 def restart_history(history, now, window):

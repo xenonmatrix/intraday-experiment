@@ -129,7 +129,18 @@ def test_exit_rules_independent(env,reason):
     obs=observe(e,b);t=next(t for t in db.trades() if t['symbol']=='SPY')
     if reason=='VWAP':
         c=obs['candidates']['SPY'];c['vwap']='101';e.last_bars=raw(b.time)
+        # The bar must have closed after the fill. The fixture fill is one
+        # second after that bar, so move the fill back to the bar open.
+        t['entered']=c['last_bar']
     assert e.exit_reason(t,obs)==reason
+
+
+def test_vwap_exit_ignores_bar_that_closed_before_fill(env):
+    e,b,db=env;tick(e,b);obs=observe(e,b)
+    t=next(t for t in db.trades() if t['symbol']=='SPY')
+    obs['candidates']['SPY']['vwap']='101';e.last_bars=raw(b.time)
+    assert dt(t['entered'])>=dt(obs['candidates']['SPY']['last_bar'])+timedelta(minutes=5)
+    assert e.exit_reason(t,obs) is None
 
 
 def test_read_only_blocks_exits_and_entries(env):
@@ -314,6 +325,29 @@ def test_mutated_or_cross_position_execution_is_ambiguous(env):
     actual['executions'][0]['price']='999'
     with pytest.raises(Unsafe,match='Immutable'):ingest(db,o['id'],actual,b.time)
     assert db.order(o['id'])['status']=='AMBIGUOUS'
+
+
+def test_extra_execution_field_keeps_partial_order_actionable(env):
+    e,b,db=env;b.partial=True;tick(e,b)
+    o=next(o for o in db.orders() if o['side']=='buy')
+    assert o['status']=='PARTIAL'
+    actual=json.loads(json.dumps(b.orders[o['broker_id']]))
+    actual['executions'][0]['venue']='XNYS'
+    ingest(db,o['id'],actual,b.time)
+    assert db.order(o['id'])['status']=='PARTIAL'
+    b.prices['SPY']=(D('98.98'),D('98.99'))
+    tick(e,b)
+    assert any(c['side']=='sell' for c in b.calls)
+
+
+def test_acknowledged_entry_is_not_a_deadline_kill(env):
+    from trader.persistent.runtime import cycle_overrun
+    e,b,db=env
+    assert cycle_overrun(16,15,False)=='KILL'
+    assert cycle_overrun(16,15,True)=='SLOW_AFTER_ACK'
+    assert cycle_overrun(15,15,False)=='OK'
+    tick(e,b)
+    assert e.mutation_acknowledged and b.calls
 
 
 def test_actual_losses_not_offset_by_profitable_trade(env):

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from .models import Config, D, Mode, UTC, NY, Unsafe, dt, iso, valid_quote
+from .models import Config, D, Mode, UTC, NY, Unsafe, bar_closed_after, dt, iso, valid_quote
 from .risk import reconcile, eligible, size
 from .strategy import evaluate
 from .store import atomic_text
@@ -155,7 +155,7 @@ class Engine:
             reason = "INVALIDATION"
         elif bid >= D(pos["target"]):
             reason = "TARGET"
-        elif c.get("below_vwap"):
+        elif c.get("below_vwap") and bar_closed_after(c.get("last_bar"), pos.get("entered")):
             reason = "VWAP"
         elif now >= dt(pos["time_exit"]) and not pos["reached_1r"]:
             reason = "TIME"
